@@ -1564,32 +1564,29 @@ async function writeVideoWithFfmpeg(frameCanvases, wavFiles, fps, outputPath) {
       prevEndFrame = endFrame;
     }
     const totalFrames = frameCounts.reduce((a, b) => a + b, 0);
-
     console.log(`[VIDEO] Encoding ${totalFrames} frames @ ${fps}fps`);
 
     const ffmpegArgs = [
       '-y',
-      '-f', 'rawvideo',
-      '-vcodec', 'rawvideo',
-      '-s', `${W}x${H}`,
-      '-pix_fmt', 'rgb24',
-      '-r', String(fps),
+      '-f', 'rawvideo', '-vcodec', 'rawvideo',
+      '-s', `${W}x${H}`, '-pix_fmt', 'rgb24', '-r', String(fps),
       '-i', 'pipe:0',
-      '-vcodec', 'libx264',
-      '-preset', 'medium',
-      '-crf', '18',
+      '-vcodec', 'libx264', '-preset', 'ultrafast', '-crf', '23',
       '-pix_fmt', 'yuv420p',
       outputPath,
     ];
 
     const ffmpeg = spawn('ffmpeg', ffmpegArgs);
-
-    // ── EPIPE FIX: suppress broken-pipe errors on stdin ──
+    ffmpeg.stdin.setMaxListeners(20);
+    ffmpeg.setMaxListeners(20);
     ffmpeg.stdin.on('error', () => {});
 
+    let done = false;
     ffmpeg.stderr.on('data', d => process.stderr.write(d));
     ffmpeg.on('close', code => {
-      if (code === 0) resolve(outputPath);
+      if (done) return;
+      done = true;
+      if (code === 0 || code === null) resolve(outputPath);
       else reject(new Error(`ffmpeg exited with ${code}`));
     });
 
@@ -1618,18 +1615,15 @@ async function writeVideoWithFfmpeg(frameCanvases, wavFiles, fps, outputPath) {
           if (ffmpeg.stdin.destroyed) break;
           const ok = ffmpeg.stdin.write(lastFrame);
           if (!ok) {
-            await new Promise((r, j) => {
+            await new Promise(r => {
               ffmpeg.stdin.once('drain', r);
-              ffmpeg.stdin.once('error', j);
-              ffmpeg.once('close', j);
             });
           }
         }
       }
       if (!ffmpeg.stdin.destroyed) ffmpeg.stdin.end();
-    })().catch(err => {
+    })().catch(() => {
       if (!ffmpeg.stdin.destroyed) ffmpeg.stdin.destroy();
-      reject(err);
     });
   });
 }
