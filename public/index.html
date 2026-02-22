@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>TextingAI Video Generator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg:       #0a0a0f;
+    --surface:  #111118;
+    --border:   #1e1e2e;
+    --accent:   #00e5ff;
+    --accent2:  #7c3aed;
+    --text:     #e2e2f0;
+    --muted:    #5a5a7a;
+    --success:  #22c55e;
+    --error:    #ef4444;
+    --warn:     #f59e0b;
+    --r:        12px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── noise grain overlay ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none; z-index: 9999;
+  }
+
+  /* ── ambient glow ── */
+  .glow-orb {
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(120px);
+    pointer-events: none;
+    z-index: 0;
+  }
+  .glow-orb.a { width: 500px; height: 500px; background: rgba(0,229,255,.06); top: -100px; left: -100px; }
+  .glow-orb.b { width: 400px; height: 400px; background: rgba(124,58,237,.06); bottom: -80px; right: -80px; }
+
+  /* ── layout ── */
+  .container {
+    position: relative; z-index: 1;
+    max-width: 860px; margin: 0 auto;
+    padding: 60px 24px 100px;
+  }
+
+  /* ── header ── */
+  header {
+    text-align: center; margin-bottom: 56px;
+  }
+  .badge {
+    display: inline-block;
+    background: linear-gradient(135deg, rgba(0,229,255,.12), rgba(124,58,237,.12));
+    border: 1px solid rgba(0,229,255,.2);
+    color: var(--accent); font-size: 11px; font-weight: 500;
+    letter-spacing: .15em; text-transform: uppercase;
+    padding: 6px 16px; border-radius: 100px;
+    margin-bottom: 24px;
+  }
+  h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: clamp(36px, 6vw, 64px);
+    font-weight: 800; line-height: 1.05;
+    letter-spacing: -0.03em;
+    background: linear-gradient(135deg, #fff 30%, var(--accent) 70%, var(--accent2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 16px;
+  }
+  .subtitle {
+    color: var(--muted); font-size: 14px; line-height: 1.7;
+    max-width: 500px; margin: 0 auto;
+  }
+
+  /* ── card ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 32px;
+    margin-bottom: 20px;
+    transition: border-color .2s;
+  }
+  .card:focus-within { border-color: rgba(0,229,255,.25); }
+
+  .card-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 13px; font-weight: 600;
+    letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 20px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card-title::before {
+    content: ''; display: block;
+    width: 20px; height: 1px; background: var(--accent); opacity: .6;
+  }
+
+  /* ── form elements ── */
+  label {
+    display: block; font-size: 12px; color: var(--muted);
+    letter-spacing: .06em; text-transform: uppercase;
+    margin-bottom: 8px; margin-top: 20px;
+  }
+  label:first-child { margin-top: 0; }
+
+  input[type="text"], input[type="password"] {
+    width: 100%;
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text); font-family: 'DM Mono', monospace; font-size: 14px;
+    padding: 12px 14px;
+    outline: none; transition: border-color .2s, background .2s;
+  }
+  input:focus {
+    border-color: rgba(0,229,255,.4);
+    background: rgba(0,229,255,.03);
+  }
+
+  /* ── theme toggle ── */
+  .theme-toggle {
+    display: flex; gap: 12px; margin-top: 0;
+  }
+  .theme-btn {
+    flex: 1; padding: 14px;
+    background: rgba(255,255,255,.03);
+    border: 1px solid var(--border);
+    border-radius: 10px; cursor: pointer;
+    color: var(--muted); font-family: 'Syne', sans-serif;
+    font-size: 13px; font-weight: 600;
+    text-align: center; transition: all .2s;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+  }
+  .theme-btn:hover { border-color: var(--accent); color: var(--text); }
+  .theme-btn.active {
+    background: linear-gradient(135deg, rgba(0,229,255,.1), rgba(124,58,237,.08));
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .theme-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    border: 1.5px solid currentColor;
+  }
+  .theme-btn[data-t="dark"] .theme-dot { background: #111; }
+  .theme-btn[data-t="light"] .theme-dot { background: #f5f5f5; }
+
+  /* ── file drop zones ── */
+  .dropzone {
+    border: 1.5px dashed var(--border);
+    border-radius: 10px;
+    padding: 28px;
+    text-align: center;
+    cursor: pointer;
+    transition: all .2s;
+    position: relative; overflow: hidden;
+  }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: rgba(0,229,255,.03); }
+  .dropzone input[type="file"] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer;
+    width: 100%; height: 100%;
+  }
+  .dropzone .dz-icon { font-size: 28px; margin-bottom: 10px; }
+  .dropzone .dz-label { font-size: 13px; color: var(--muted); }
+  .dropzone .dz-label strong { color: var(--accent); }
+  .dropzone .dz-files { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .file-chip {
+    background: rgba(0,229,255,.08); border: 1px solid rgba(0,229,255,.2);
+    color: var(--accent); border-radius: 6px;
+    font-size: 11px; padding: 4px 10px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .file-chip .rm { cursor: pointer; opacity: .6; }
+  .file-chip .rm:hover { opacity: 1; }
+
+  /* ── row layout ── */
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media(max-width: 560px) { .row { grid-template-columns: 1fr; } }
+
+  /* ── submit button ── */
+  .submit-btn {
+    width: 100%; padding: 18px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none; border-radius: 12px;
+    color: #000; font-family: 'Syne', sans-serif;
+    font-size: 16px; font-weight: 700;
+    cursor: pointer; letter-spacing: .04em;
+    transition: all .2s; position: relative; overflow: hidden;
+    margin-top: 8px;
+  }
+  .submit-btn::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(135deg, rgba(255,255,255,.15), transparent);
+    opacity: 0; transition: opacity .2s;
+  }
+  .submit-btn:hover::after { opacity: 1; }
+  .submit-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 32px rgba(0,229,255,.25); }
+  .submit-btn:active { transform: translateY(0); }
+  .submit-btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+  /* ── progress panel ── */
+  #progress-panel {
+    display: none;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r); overflow: hidden; margin-top: 20px;
+  }
+  #progress-panel.visible { display: block; }
+
+  .progress-header {
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .progress-title {
+    font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700;
+    color: var(--accent);
+  }
+  .status-badge {
+    font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    padding: 4px 12px; border-radius: 100px; font-weight: 500;
+  }
+  .status-badge.queued  { background: rgba(245,158,11,.12); color: var(--warn); border: 1px solid rgba(245,158,11,.25); }
+  .status-badge.running { background: rgba(0,229,255,.1);   color: var(--accent); border: 1px solid rgba(0,229,255,.25); animation: pulse 1.8s ease-in-out infinite; }
+  .status-badge.done    { background: rgba(34,197,94,.1);   color: var(--success); border: 1px solid rgba(34,197,94,.25); }
+  .status-badge.error   { background: rgba(239,68,68,.1);   color: var(--error);   border: 1px solid rgba(239,68,68,.25); }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
+
+  /* ── log terminal ── */
+  .log-box {
+    background: #070710; font-family: 'DM Mono', monospace;
+    font-size: 12px; line-height: 1.7;
+    padding: 20px 24px; height: 260px; overflow-y: auto;
+    color: #8888aa;
+  }
+  .log-box .log-line { padding: 1px 0; }
+  .log-box .log-line.info { color: #8888aa; }
+  .log-box .log-line.ok   { color: var(--success); }
+  .log-box .log-line.err  { color: var(--error); }
+  .log-box .log-line.tts  { color: var(--accent); }
+
+  /* ── bar progress ── */
+  .bar-wrap {
+    height: 3px; background: var(--border);
+  }
+  .bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    width: 0; transition: width .4s ease;
+  }
+
+  /* ── download area ── */
+  .download-area {
+    padding: 24px 28px;
+    border-top: 1px solid var(--border);
+    display: none; gap: 16px; align-items: center;
+  }
+  .download-area.visible { display: flex; }
+  .dl-btn {
+    display: inline-flex; align-items: center; gap: 10px;
+    background: linear-gradient(135deg, var(--success), #16a34a);
+    color: #fff; font-family: 'Syne', sans-serif;
+    font-size: 14px; font-weight: 600;
+    padding: 12px 24px; border-radius: 8px;
+    text-decoration: none; transition: all .2s;
+  }
+  .dl-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(34,197,94,.3); }
+  .dl-info { font-size: 12px; color: var(--muted); }
+
+  /* ── script example ── */
+  .example-block {
+    background: #070710; border-radius: 10px;
+    padding: 18px 20px; font-size: 12px; line-height: 1.8;
+    color: #8888aa; margin-top: 12px; overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+  .example-block .kw  { color: var(--accent); }
+  .example-block .str { color: #a5f3fc; }
+  .example-block .cmt { color: #3a3a5a; }
+  .example-block .nm  { color: var(--accent2); }
+
+  details summary {
+    cursor: pointer; color: var(--muted); font-size: 12px;
+    letter-spacing: .06em; text-transform: uppercase;
+    margin-top: 16px; user-select: none;
+    display: flex; align-items: center; gap: 8px;
+  }
+  details summary::after { content: '▸'; transition: transform .2s; }
+  details[open] summary::after { transform: rotate(90deg); }
+  details summary:hover { color: var(--text); }
+
+  /* ── scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="glow-orb a"></div>
+<div class="glow-orb b"></div>
+
+<div class="container">
+
+  <!-- header -->
+  <header>
+    <div class="badge">✦ AI Video Generator</div>
+    <h1>iMessage<br/>Video Studio</h1>
+    <p class="subtitle">Generate cinematic iMessage conversation videos from a simple script. Powered by AI TTS.</p>
+  </header>
+
+  <!-- form -->
+  <form id="gen-form" enctype="multipart/form-data">
+
+    <!-- API Key -->
+    <div class="card">
+      <div class="card-title">Credentials</div>
+      <label>AI33Pro / ElevenLabs API Key</label>
+      <input type="password" name="apiKey" id="apiKey" placeholder="sk-••••••••••••••••" required autocomplete="off"/>
+    </div>
+
+    <!-- Script upload -->
+    <div class="card">
+      <div class="card-title">Script</div>
+      <div class="dropzone" id="script-dz">
+        <input type="file" name="script" id="script-input" accept=".txt" required/>
+        <div class="dz-icon">📄</div>
+        <div class="dz-label"><strong>Click to upload</strong> or drag &amp; drop your .txt script</div>
+        <div class="dz-files" id="script-files"></div>
+      </div>
+
+      <details>
+        <summary>Script format reference</summary>
+        <div class="example-block">
+<span class="cmt"># Optional settings</span>
+<span class="kw">UM</span>: <span class="nm">42</span>            <span class="cmt"># unread message count</span>
+<span class="kw">CR</span>: <span class="nm">50</span>            <span class="cmt"># UI corner radius</span>
+
+<span class="kw">iMessage</span>: <span class="str">Sarah</span>    <span class="cmt"># contact name (: avatar.jpg optional)</span>
+<span class="nm">James</span> > me: Hey! Did you see that movie?
+<span class="nm">me</span> > <span class="nm">Sarah</span>: Not yet, is it good?
+<span class="nm">Sarah</span> > <span class="nm">James</span>: It was amazing! You should go
+<span class="nm">me</span> > <span class="nm">James</span>: Ok I'll check it out tonight
+        </div>
+      </details>
+    </div>
+
+    <!-- Asset files -->
+    <div class="card">
+      <div class="card-title">Assets <span style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">(images, avatars, sfx — optional)</span></div>
+      <div class="dropzone" id="assets-dz">
+        <input type="file" name="assets" id="assets-input" multiple accept="image/*,audio/*"/>
+        <div class="dz-icon">🗂</div>
+        <div class="dz-label"><strong>Add files</strong> referenced in your script</div>
+        <div class="dz-files" id="assets-files"></div>
+      </div>
+
+      <div class="row" style="margin-top:20px">
+        <div>
+          <label>Custom "Sent" Sound (optional)</label>
+          <div class="dropzone" style="padding:18px">
+            <input type="file" name="sentSfx" id="sent-input" accept="audio/*"/>
+            <div class="dz-label" style="font-size:12px"><strong>sent.mp3</strong> replacement</div>
+            <div class="dz-files" id="sent-files"></div>
+          </div>
+        </div>
+        <div>
+          <label>Custom "Received" Sound (optional)</label>
+          <div class="dropzone" style="padding:18px">
+            <input type="file" name="receivedSfx" id="rcvd-input" accept="audio/*"/>
+            <div class="dz-label" style="font-size:12px"><strong>received.mp3</strong> replacement</div>
+            <div class="dz-files" id="rcvd-files"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Theme -->
+    <div class="card">
+      <div class="card-title">Theme</div>
+      <input type="hidden" name="theme" id="theme-val" value="dark"/>
+      <div class="theme-toggle">
+        <button type="button" class="theme-btn active" data-t="dark">
+          <span class="theme-dot"></span> Dark Mode
+        </button>
+        <button type="button" class="theme-btn" data-t="light">
+          <span class="theme-dot"></span> Light Mode
+        </button>
+      </div>
+    </div>
+
+    <button type="submit" class="submit-btn" id="submit-btn">
+      ⚡ Generate Video
+    </button>
+  </form>
+
+  <!-- progress panel -->
+  <div id="progress-panel">
+    <div class="progress-header">
+      <div class="progress-title">Generation Progress</div>
+      <div class="status-badge queued" id="status-badge">Queued</div>
+    </div>
+    <div class="bar-wrap"><div class="bar-fill" id="bar-fill"></div></div>
+    <div class="log-box" id="log-box"></div>
+    <div class="download-area" id="dl-area">
+      <a class="dl-btn" id="dl-link" href="#" download>
+        ⬇ Download Video
+      </a>
+      <div class="dl-info" id="dl-info">Your video is ready!</div>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<script>
+// ── dropzone helpers ─────────────────────────────────────────────────
+function initDropzone(dzId, inputId, filesId, multiple) {
+  const dz    = document.getElementById(dzId);
+  const input = document.getElementById(inputId);
+  const filesEl = document.getElementById(filesId);
+  const files = new Map();
+
+  function renderFiles() {
+    filesEl.innerHTML = '';
+    files.forEach((file, name) => {
+      const chip = document.createElement('div');
+      chip.className = 'file-chip';
+      chip.innerHTML = `${name} <span class="rm" data-n="${name}">✕</span>`;
+      chip.querySelector('.rm').onclick = e => {
+        e.stopPropagation();
+        files.delete(name);
+        renderFiles();
+        // Reset file input
+        input.value = '';
+      };
+      filesEl.appendChild(chip);
+    });
+  }
+
+  input.addEventListener('change', () => {
+    if (!multiple) files.clear();
+    for (const f of input.files) files.set(f.name, f);
+    renderFiles();
+  });
+
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+  dz.addEventListener('drop', e => {
+    e.preventDefault(); dz.classList.remove('drag');
+    const dt = e.dataTransfer.files;
+    if (!multiple) files.clear();
+    for (const f of dt) files.set(f.name, f);
+    renderFiles();
+  });
+
+  return () => [...files.values()];
+}
+
+const getScriptFiles  = initDropzone('script-dz',  'script-input',  'script-files',  false);
+const getAssetFiles   = initDropzone('assets-dz',  'assets-input',  'assets-files',  true);
+const getSentFile     = initDropzone('script-dz',  'sent-input',    'sent-files',    false);
+const getRcvdFile     = initDropzone('script-dz',  'rcvd-input',    'rcvd-files',    false);
+
+// ── theme toggle ─────────────────────────────────────────────────────
+document.querySelectorAll('.theme-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('theme-val').value = btn.dataset.t;
+  });
+});
+
+// ── form submit ──────────────────────────────────────────────────────
+document.getElementById('gen-form').addEventListener('submit', async e => {
+  e.preventDefault();
+
+  const submitBtn = document.getElementById('submit-btn');
+  const scriptFiles = document.getElementById('script-input').files;
+
+  if (!scriptFiles.length) {
+    alert('Please upload a script .txt file.');
+    return;
+  }
+  const apiKey = document.getElementById('apiKey').value.trim();
+  if (!apiKey) { alert('Please enter your API key.'); return; }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = '⏳ Uploading…';
+
+  const fd = new FormData(e.target);
+
+  // Add asset files from our map (input may have been reset)
+  const assetInput = document.getElementById('assets-input');
+  for (const f of assetInput.files) fd.append('assets', f);
+
+  const sentInput = document.getElementById('sent-input');
+  if (sentInput.files.length) fd.set('sentSfx', sentInput.files[0]);
+
+  const rcvdInput = document.getElementById('rcvd-input');
+  if (rcvdInput.files.length) fd.set('receivedSfx', rcvdInput.files[0]);
+
+  try {
+    const resp = await fetch('/api/generate', { method: 'POST', body: fd });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Server error');
+
+    showProgress(data.jobId);
+  } catch (err) {
+    alert('Error: ' + err.message);
+    submitBtn.disabled = false;
+    submitBtn.textContent = '⚡ Generate Video';
+  }
+});
+
+// ── progress polling ─────────────────────────────────────────────────
+function showProgress(jobId) {
+  const panel = document.getElementById('progress-panel');
+  panel.classList.add('visible');
+  panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  let lastLogLen = 0;
+  let progress   = 5;
+  const logBox   = document.getElementById('log-box');
+  const barFill  = document.getElementById('bar-fill');
+  const statusBadge = document.getElementById('status-badge');
+  const dlArea   = document.getElementById('dl-area');
+  const dlLink   = document.getElementById('dl-link');
+  const submitBtn = document.getElementById('submit-btn');
+
+  // Reset
+  logBox.innerHTML = '';
+  barFill.style.width = '5%';
+  dlArea.classList.remove('visible');
+  statusBadge.className = 'status-badge queued';
+  statusBadge.textContent = 'Queued';
+
+  addLog('info', `Job started: ${jobId}`);
+
+  const iv = setInterval(async () => {
+    try {
+      const r    = await fetch(`/api/status/${jobId}`);
+      const data = await r.json();
+
+      // Append new log lines
+      const newLines = (data.log || []).slice(lastLogLen);
+      lastLogLen = data.log?.length || 0;
+      for (const line of newLines) addLog(classifyLine(line), line);
+
+      // Update status
+      statusBadge.className = `status-badge ${data.status}`;
+      statusBadge.textContent = { queued:'Queued', running:'Rendering…', done:'Done ✓', error:'Error' }[data.status] || data.status;
+
+      // Progress bar heuristic
+      if (data.status === 'running') {
+        progress = Math.min(progress + 1.5, 90);
+      } else if (data.status === 'done') {
+        progress = 100;
+      }
+      barFill.style.width = progress + '%';
+
+      if (data.status === 'done') {
+        clearInterval(iv);
+        addLog('ok', '✅ Video generation complete!');
+        dlLink.href = data.downloadUrl;
+        dlArea.classList.add('visible');
+        dlArea.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        submitBtn.disabled = false;
+        submitBtn.textContent = '⚡ Generate Another Video';
+      }
+
+      if (data.status === 'error') {
+        clearInterval(iv);
+        addLog('err', '❌ ' + (data.error || 'Unknown error'));
+        submitBtn.disabled = false;
+        submitBtn.textContent = '⚡ Try Again';
+      }
+    } catch (_) { /* network hiccup — keep polling */ }
+  }, 1800);
+}
+
+function classifyLine(line) {
+  if (/✅|DONE|done|complete/i.test(line))  return 'ok';
+  if (/❌|error|failed|ERR/i.test(line))    return 'err';
+  if (/TTS|tts|audio|mp3/i.test(line))     return 'tts';
+  return 'info';
+}
+
+function addLog(cls, text) {
+  const logBox = document.getElementById('log-box');
+  const div = document.createElement('div');
+  div.className = `log-line ${cls}`;
+  div.textContent = text;
+  logBox.appendChild(div);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+</script>
+</body>
+</html>
