@@ -1600,11 +1600,13 @@ async function writeVideoWithFfmpeg(frameCanvases, wavFiles, fps, outputPath) {
       '-crf', '23',
       '-pix_fmt', 'yuv420p',
       outputPath,
-    ], { encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 });
+    ], { encoding: 'utf8', maxBuffer: 100 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 
-    if (r.status !== 0) {
+    if (r.status !== 0 || r.error) {
       console.error('[VIDEO] ffmpeg stderr:', r.stderr);
-      throw new Error(`ffmpeg encode failed: ${r.status}`);
+      console.error('[VIDEO] ffmpeg error:', r.error);
+      console.error('[VIDEO] ffmpeg status:', r.status, '| signal:', r.signal);
+      throw new Error(`ffmpeg encode failed: status=${r.status} signal=${r.signal} error=${r.error}`);
     }
 
     console.log('[VIDEO] Encode complete.');
