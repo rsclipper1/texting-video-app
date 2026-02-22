@@ -1565,57 +1565,79 @@ async function writeVideoWithFfmpeg(frameCanvases, wavFiles, fps, outputPath) {
   const totalFrames = frameCounts.reduce((a, b) => a + b, 0);
   console.log(`[VIDEO] Encoding ${totalFrames} frames @ ${fps}fps`);
 
-  // Write all frames as individual PNG files then encode with ffmpeg concat
-  const frameDir = outputPath + '_frames';
-  fs.mkdirSync(frameDir, { recursive: true });
+  // Stream frames directly into ffmpeg via stdin pipe — avoids writing
+  // hundreds of PNGs to disk and blowing Railway's 512 MB RAM limit.
+  return new Promise((resolve, reject) => {
+    const ffmpegBin = (() => {
+      try { return _exec('which ffmpeg').toString().trim(); } catch (_) { return 'ffmpeg'; }
+    })();
 
-  try {
-    let frameIdx = 0;
-    let lastFrame = null;
-
-    for (let si = 0; si < frameCanvases.length; si++) {
-      const canvas = frameCanvases[si];
-      if (canvas !== null) {
-        lastFrame = canvas.toBuffer('image/png');
-      }
-      if (!lastFrame) continue;
-
-      const count = frameCounts[si] || 0;
-      for (let f = 0; f < count; f++) {
-        const framePath = path.join(frameDir, `frame_${String(frameIdx).padStart(6, '0')}.png`);
-        fs.writeFileSync(framePath, lastFrame);
-        frameIdx++;
-      }
-    }
-
-    console.log(`[VIDEO] Wrote ${frameIdx} PNG frames, now encoding...`);
-
-    // Encode with ffmpeg from PNG sequence
-    const r = spawnSync('ffmpeg', [
+    const ff = spawn(ffmpegBin, [
       '-y',
       '-framerate', String(fps),
-      '-i', path.join(frameDir, 'frame_%06d.png'),
+      '-f', 'image2pipe',
+      '-vcodec', 'png',
+      '-i', 'pipe:0',
       '-vcodec', 'libx264',
       '-preset', 'ultrafast',
       '-crf', '23',
       '-pix_fmt', 'yuv420p',
       outputPath,
-    ], { encoding: 'utf8', maxBuffer: 100 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+    ], { stdio: ['pipe', 'ignore', 'pipe'] });
 
-    if (r.status !== 0 || r.error) {
-      console.error('[VIDEO] ffmpeg stderr:', r.stderr);
-      console.error('[VIDEO] ffmpeg error:', r.error);
-      console.error('[VIDEO] ffmpeg status:', r.status, '| signal:', r.signal);
-      throw new Error(`ffmpeg encode failed: status=${r.status} signal=${r.signal} error=${r.error}`);
+    let stderrBuf = '';
+    ff.stderr.on('data', d => { stderrBuf += d.toString(); });
+
+    ff.on('error', err => reject(new Error(`ffmpeg spawn error: ${err.message}`)));
+    ff.on('close', code => {
+      if (code === 0) {
+        console.log('[VIDEO] Encode complete.');
+        resolve(outputPath);
+      } else {
+        console.error('[VIDEO] ffmpeg stderr:', stderrBuf.slice(-2000));
+        reject(new Error(`ffmpeg encode failed with code ${code}`));
+      }
+    });
+
+    // Write frames one at a time into ffmpeg's stdin
+    let frameIdx = 0;
+    let lastFrame = null;
+
+    function writeNext(si) {
+      if (si >= frameCanvases.length) {
+        console.log(`[VIDEO] Streamed ${frameIdx} frames, waiting for encode...`);
+        ff.stdin.end();
+        return;
+      }
+
+      const canvas = frameCanvases[si];
+      if (canvas !== null) {
+        lastFrame = canvas.toBuffer('image/png');
+      }
+
+      const count = (lastFrame ? (frameCounts[si] || 0) : 0);
+      let f = 0;
+
+      function writeFrame() {
+        if (f >= count) {
+          frameIdx += count;
+          writeNext(si + 1);
+          return;
+        }
+        const ok = ff.stdin.write(lastFrame);
+        f++;
+        if (ok) {
+          writeFrame();
+        } else {
+          ff.stdin.once('drain', writeFrame);
+        }
+      }
+
+      writeFrame();
     }
 
-    console.log('[VIDEO] Encode complete.');
-    return outputPath;
-
-  } finally {
-    // Clean up frame files
-    try { fs.rmSync(frameDir, { recursive: true, force: true }); } catch (_) {}
-  }
+    writeNext(0);
+  });
 }
 
 async function muxVideoAudio(videoPath, audioPath, outputPath) {
