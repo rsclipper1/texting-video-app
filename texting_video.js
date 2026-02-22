@@ -511,11 +511,9 @@ function parseFileSettingsAndThreads(filename) {
 
 // =====================================================================
 // FONT LOADING
-// node-canvas CSS font parser is strict — no comma-fallback lists,
-// no quoted family names with spaces. Use a plain identifier only.
 // =====================================================================
 let fontRegistered = false;
-let FONT_FAMILY    = 'Arial';   // always-available fallback
+let FONT_FAMILY    = 'Arial';
 
 function ensureFont() {
   if (fontRegistered) return;
@@ -525,7 +523,7 @@ function ensureFont() {
     return;
   }
   try {
-    registerFont(FONT_PATH, { family: 'SFPro' });  // no spaces in family name!
+    registerFont(FONT_PATH, { family: 'SFPro' });
     FONT_FAMILY = 'SFPro';
     console.log('[FONT] Loaded SFPro from', FONT_PATH);
   } catch (e) {
@@ -533,8 +531,6 @@ function ensureFont() {
   }
 }
 
-// Produces a CSS font string that node-canvas always parses correctly.
-// weight: 'normal' | 'bold' | a number string like '400'
 function fontStr(size, weight = 'normal') {
   const w = (weight === '400' || weight === 'normal') ? 'normal'
           : (weight === '600' || weight === '700' || weight === 'bold') ? 'bold'
@@ -543,7 +539,7 @@ function fontStr(size, weight = 'normal') {
 }
 
 // =====================================================================
-// TEXT WRAPPING (canvas measureText)
+// TEXT WRAPPING
 // =====================================================================
 function getTextWidth(ctx, text) {
   return ctx.measureText(text).width;
@@ -560,7 +556,6 @@ function wrapText(ctx, text, maxWidth) {
     } else {
       if (current) lines.push(current);
       current = w;
-      // Hard-break single long word
       while (getTextWidth(ctx, current) > maxWidth && current.length > 1) {
         for (let i = 1; i < current.length; i++) {
           if (getTextWidth(ctx, current.slice(0, i)) > maxWidth) {
@@ -595,11 +590,10 @@ function roundedRect(ctx, x, y, w, h, r) {
 }
 
 // =====================================================================
-// SVG PATH → POLYGON POINTS  (simple cubic/quadratic approximation)
+// SVG PATH → POLYGON POINTS
 // =====================================================================
 function parseSvgPathToPoints(d, scaleX = 1, scaleY = 1, ox = 0, oy = 0) {
   const pts = [];
-  // Tokenise commands
   const cmds = [];
   const re = /([MmCcQqLlZz])\s*([\d\s.,+-]*)/g;
   let m;
@@ -665,7 +659,6 @@ function drawSvgTail(ctx, svgPath, pos, scaleX, scaleY, color) {
 }
 
 function drawSvgTailFlipped(ctx, svgPath, pos, scaleX, scaleY, color) {
-  // Mirror horizontally around the tail anchor x
   const pts = parseSvgPathToPoints(svgPath, scaleX, scaleY, 0, 0);
   ctx.fillStyle = color;
   ctx.beginPath();
@@ -677,13 +670,12 @@ function drawSvgTailFlipped(ctx, svgPath, pos, scaleX, scaleY, color) {
 }
 
 // =====================================================================
-// GAUSSIAN BLUR (pure JS box-blur approximation for node-canvas)
+// GAUSSIAN BLUR
 // =====================================================================
 function gaussianBlurRegion(ctx, x0, y0, x1, y1, radius) {
   const w = x1 - x0, h = y1 - y0;
   if (w <= 0 || h <= 0) return;
   const imageData = ctx.getImageData(x0, y0, w, h);
-  // Simple 3-pass box blur approximation
   const passes = 3;
   for (let p = 0; p < passes; p++) {
     boxBlurH(imageData.data, w, h, radius);
@@ -725,64 +717,46 @@ function boxBlurV(data, w, h, r) {
 }
 
 // =====================================================================
-// BUBBLE IMAGE  (returns a canvas)
-//
-// All values derived from Python 1x-equivalent:
-//   Python draws on 2x canvas then downscales by 2.
-//   JS draws directly at 1x — so every *2 in Python becomes *1 here.
-//   Tail positions: tailSX=1.98*1.5=2.97, tailSY=1.35*1.5=2.025
-//                   me:      tailX = ox+bubbleW-37,  tailY = oy+bubbleH-36
-//                   received: tailX = ox+37,           tailY = oy+bubbleH-36
+// BUBBLE IMAGE
 // =====================================================================
 function bubbleCanvas(text, sender, width = 630, fontSize = Math.round(28 * 1.5), showTail = true) {
   ensureFont();
 
-  // Use a larger effective font so text is comfortably readable in 1080p video.
-  // Python rendered at 42px on a 2x canvas (84px effective), downscaled = sharp 42px.
-  // node-canvas renders directly — bump to 46px to compensate for no supersampling.
   const FONT_SIZE = Math.max(fontSize, 46);
-
-  const padX   = 20;   // left/right text padding
-  const padTop = 20;   // top padding
-  const padBot = 20;   // bottom padding
-  // max width allowed for text (leaves room for tail + padding)
+  const padX   = 20;
+  const padTop = 20;
+  const padBot = 20;
   const maxTW  = width - padX * 2 - Math.round(20 * 1.5);
 
   const displayNoBlur = stripBlurMarkers(text);
 
-  // ── measure text ───────────────────────────────────────────────────
   const measureC   = createCanvas(10, 10);
   const measureCtx = measureC.getContext('2d');
-  measureCtx.font  = fontStr(FONT_SIZE);      // MUST set font before measureText!
+  measureCtx.font  = fontStr(FONT_SIZE);
 
-  // Wrap at maxTW
   const wrapped = wrapText(measureCtx, displayNoBlur, maxTW);
   const lines   = wrapped.split('\n');
 
-  const lineSpacing = 2;  // 2px fixed — tightest readable gap between lines
+  const lineSpacing = 2;
   const lineHeight  = Math.round(FONT_SIZE * 1.22 + lineSpacing);
   const textH       = lines.length * lineHeight;
   const textW       = Math.max(1, ...lines.map(l => measureCtx.measureText(l).width));
 
-  // Enforce a minimum bubble width so very short words don't collapse
   const minBubbleW = Math.round(FONT_SIZE * 2.5);
   const bubbleW    = Math.max(minBubbleW, Math.round(textW + padX * 2 + 4));
   const bubbleH    = Math.round(textH + padTop + padBot + 2);
 
-  // Extra horizontal space to the side where the tail lives
-  const tailRoom = Math.round(20 * 1.5);   // 30px
+  const tailRoom = Math.round(20 * 1.5);
   const imgW     = bubbleW + tailRoom + Math.round(5 * 1.5);
   const imgH     = bubbleH + Math.round(8 * 1.5);
 
-  // ── border-radius ──────────────────────────────────────────────────
   const numLines = lines.length;
   let br = numLines === 1 ? Math.round(23 * 1.5)
          : numLines === 2 ? Math.round(21 * 1.5)
                           : Math.round(19 * 1.5);
   br = Math.min(br, Math.floor(bubbleH / 2) - 2, Math.floor(bubbleW / 2) - 2);
 
-  // SAFE: small margin between bubble right/left edge and canvas edge
-  const SAFE = Math.round(5 * 1.5);   // 8px
+  const SAFE = Math.round(5 * 1.5);
 
   const colorArr = sender === 'me' ? THEME.bubble_sent : THEME.bubble_rcvd;
   const color    = rgb(colorArr);
@@ -791,13 +765,9 @@ function bubbleCanvas(text, sender, width = 630, fontSize = Math.round(28 * 1.5)
   const canvas = createCanvas(imgW, imgH);
   const ctx    = canvas.getContext('2d');
 
-  // ── background ─────────────────────────────────────────────────────
   ctx.fillStyle = chatBg;
   ctx.fillRect(0, 0, imgW, imgH);
 
-  // ── bubble origin ──────────────────────────────────────────────────
-  // For 'me'  : bubble flush to the right, tail hangs off right edge
-  // For other : bubble flush to the left,  tail hangs off left edge
   let ox, oy;
   if (sender === 'me') {
     ox = imgW - bubbleW - SAFE;
@@ -807,17 +777,10 @@ function bubbleCanvas(text, sender, width = 630, fontSize = Math.round(28 * 1.5)
     oy = 0;
   }
 
-  // ── draw bubble rounded rect ───────────────────────────────────────
   ctx.fillStyle = color;
   roundedRect(ctx, ox, oy, bubbleW, bubbleH, br);
   ctx.fill();
 
-  // ── draw tail ──────────────────────────────────────────────────────
-  // Exact values reverse-engineered from Python's 2x→1x math:
-  //   tailSX = 1.98*1.5 = 2.97,  tailSY = 1.35*1.5 = 2.025
-  //   'me'  tailX = ox+bubbleW-37 (tail sticks 13px past bubble right edge)
-  //   other tailX = ox+37         (tail sticks 13px past bubble left edge)
-  //   tailY = oy+bubbleH-36       (tail is at bottom of bubble)
   if (showTail) {
     const tailSX = 2.97;
     const tailSY = 2.025;
@@ -829,23 +792,16 @@ function bubbleCanvas(text, sender, width = 630, fontSize = Math.round(28 * 1.5)
     }
   }
 
-  // ── draw text ──────────────────────────────────────────────────────
   ctx.font         = fontStr(FONT_SIZE);
   ctx.textBaseline = 'top';
 
-  // Full-opacity text colors
   const textColor = sender === 'me'
     ? 'rgb(255,255,255)'
     : `rgb(${THEME.rcvd_text_color[0]},${THEME.rcvd_text_color[1]},${THEME.rcvd_text_color[2]})`;
 
-  // Vertically center the text block inside the bubble
   const totalTextH = lines.length * lineHeight;
   const tyStart    = oy + Math.round((bubbleH - totalTextH) / 2);
-
-  // Center the text BLOCK as a whole, then left-align each line within it.
-  // This matches Python: tx = ox + (bubbleW - text_block_w)//2  (block centered)
-  // then each line drawn at the same tx (left-aligned inside the block).
-  const blockLeft = ox + Math.round((bubbleW - textW) / 2);
+  const blockLeft  = ox + Math.round((bubbleW - textW) / 2);
   let ty = tyStart;
   for (const line of lines) {
     ctx.fillStyle = textColor;
@@ -853,7 +809,6 @@ function bubbleCanvas(text, sender, width = 630, fontSize = Math.round(28 * 1.5)
     ty += lineHeight;
   }
 
-  // ── blur {blurred} spans ───────────────────────────────────────────
   const hasBlur = /{[^}]+}/.test(text);
   if (hasBlur) {
     const wrappedBlur = wrapTextPreservingBlur(text, ctx, maxTW);
@@ -863,7 +818,7 @@ function bubbleCanvas(text, sender, width = 630, fontSize = Math.round(28 * 1.5)
 
     for (const bline of blurLines) {
       const runs  = extractBlurRuns(bline);
-      let btx = blockLeft;  // same left edge as text (block-centered, line left-aligned)
+      let btx = blockLeft;
 
       for (const [seg, isBlurred] of runs) {
         const segW = measureCtx.measureText(stripBlurMarkers(seg)).width;
@@ -912,7 +867,7 @@ function wrapTextPreservingBlur(text, ctx, maxWidth) {
 }
 
 // =====================================================================
-// IMAGE MESSAGE CLIP  (returns canvas)
+// IMAGE MESSAGE CLIP
 // =====================================================================
 async function imageMessageClip(fname, sender, maxWidth = Math.round(200 * 1.5)) {
   let fpath = path.isAbsolute(fname) ? fname : path.join(IMAGE_BASE_DIR, fname);
@@ -945,18 +900,10 @@ async function imageMessageClip(fname, sender, maxWidth = Math.round(200 * 1.5))
   ctx.fillStyle = rgb(THEME.chat_bg);
   ctx.fillRect(0, 0, bgW, bgH);
 
-  // Rounded clip for image
   roundedRect(ctx, pad, pad, w, h, Math.round(16 * 1.5));
   ctx.clip();
   ctx.drawImage(imgNode, pad, pad, w, h);
   ctx.restore();
-
-  // Rounded mask for entire bubble
-  const maskCanvas = createCanvas(bgW, bgH);
-  const mCtx = maskCanvas.getContext('2d');
-  roundedRect(mCtx, 0, 0, bgW, bgH, radius);
-  mCtx.fillStyle = '#fff';
-  mCtx.fill();
 
   return canvas;
 }
@@ -1010,7 +957,7 @@ function isImageMessage(text) {
 }
 
 // =====================================================================
-// HEADER  (returns a canvas)
+// HEADER
 // =====================================================================
 async function createContactHeader(name, unreadCount = null, avatarFile = null) {
   ensureFont();
@@ -1025,7 +972,6 @@ async function createContactHeader(name, unreadCount = null, avatarFile = null) 
   const AVATAR_Y = Math.round(70 * 1.5);
   const NAME_Y   = Math.round(135 * 1.5);
 
-  // Back chevron
   ctx.strokeStyle = '#007AFF';
   ctx.lineWidth   = 2.9 * 1.8;
   ctx.lineCap     = 'round';
@@ -1037,7 +983,6 @@ async function createContactHeader(name, unreadCount = null, avatarFile = null) 
   ctx.lineTo(cx0 + 13.5 * 1.8, cy0 + 27 * 1.8);
   ctx.stroke();
 
-  // Video icon (top-right)
   const vx = CHAT_W - Math.round(85 * 1.5);
   const vy = Math.round(50 * 1.5);
   ctx.strokeStyle = '#007AFF';
@@ -1053,7 +998,6 @@ async function createContactHeader(name, unreadCount = null, avatarFile = null) 
   ctx.closePath();
   ctx.stroke();
 
-  // Unread pill
   if (unreadCount && unreadCount !== '') {
     const display  = String(unreadCount);
     const pillW    = Math.round(26 * 1.5) + display.length * Math.round(10 * 1.5);
@@ -1071,7 +1015,6 @@ async function createContactHeader(name, unreadCount = null, avatarFile = null) 
     ctx.fillText(display, pillX + pillW / 2, pillY + pillH / 2);
   }
 
-  // Avatar
   if (avatarFile) {
     const aPath = path.isAbsolute(avatarFile) ? avatarFile : path.join(IMAGE_BASE_DIR, avatarFile);
     if (fs.existsSync(aPath)) {
@@ -1085,7 +1028,6 @@ async function createContactHeader(name, unreadCount = null, avatarFile = null) 
       ctx.restore();
     }
   } else {
-    // Gradient avatar circle
     const grad = ctx.createLinearGradient(cx, AVATAR_Y - AVATAR_R, cx, AVATAR_Y + AVATAR_R);
     grad.addColorStop(0, '#A5ABB9');
     grad.addColorStop(1, '#858994');
@@ -1102,7 +1044,6 @@ async function createContactHeader(name, unreadCount = null, avatarFile = null) 
     ctx.fillText(initial, cx, AVATAR_Y);
   }
 
-  // Name
   ctx.fillStyle    = THEME.name_fill_hex;
   ctx.font         = fontStr(Math.round(24 * 1.5), THEME.name_weight);
   ctx.textAlign    = 'center';
@@ -1110,7 +1051,6 @@ async function createContactHeader(name, unreadCount = null, avatarFile = null) 
   const nameX = cx - Math.round(4 * 1.5);
   ctx.fillText(name, nameX, NAME_Y);
 
-  // Chevron after name
   ctx.font = fontStr(Math.round(24 * 1.5), THEME.name_weight);
   const nameW = ctx.measureText(name).width;
   const chX = nameX + nameW / 2 + Math.round(18 * 1.5);
@@ -1146,7 +1086,6 @@ async function createSceneImage(bubbleCanvases, widths, heights, senders, poster
     gaps.push(senders[visIdx[vi]] === senders[visIdx[vi + 1]] ? baseGapSame : baseGapDiff);
   }
 
-  // Compute effective drawn heights accounting for scale-to-fit
   const visH = visIdx.map(i => {
     const s = widths[i] > maxBW ? maxBW / widths[i] : 1;
     return Math.round(heights[i] * s);
@@ -1172,7 +1111,6 @@ async function createSceneImage(bubbleCanvases, widths, heights, senders, poster
   for (let vi = 0; vi < visIdx.length; vi++) {
     const orig   = visIdx[vi];
     const bubble = bubbleCanvases[orig];
-    // Scale bubble proportionally if it exceeds available width
     const scale  = widths[orig] > maxBW ? maxBW / widths[orig] : 1;
     const drawW  = Math.round(widths[orig] * scale);
     const drawH  = Math.round(heights[orig] * scale);
@@ -1283,8 +1221,6 @@ async function runPlugSelenium(replyText, contextImgPath, dlFolder) {
 
   try {
     const page = await browser.newPage();
-
-    // Set download behavior
     const cdp = await page.target().createCDPSession();
     await cdp.send('Page.setDownloadBehavior', {
       behavior: 'allow',
@@ -1294,7 +1230,6 @@ async function runPlugSelenium(replyText, contextImgPath, dlFolder) {
     console.log(`[PLUG PUPPETEER] Opening ${PLUGAI_URL}`);
     await page.goto(PLUGAI_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
-    // Upload context image
     try {
       const fileInput = await page.$('input[type="file"]');
       if (fileInput) {
@@ -1303,7 +1238,6 @@ async function runPlugSelenium(replyText, contextImgPath, dlFolder) {
       }
     } catch (e) { console.warn('[PLUG PUPPETEER] File upload warning:', e.message); }
 
-    // Set reply text
     try {
       const bubbleDiv = await page.$('div.msg-bubble[contenteditable="true"]');
       if (bubbleDiv) {
@@ -1315,7 +1249,6 @@ async function runPlugSelenium(replyText, contextImgPath, dlFolder) {
       }
     } catch (e) { console.warn('[PLUG PUPPETEER] Reply text warning:', e.message); }
 
-    // Click save button
     try {
       await page.click('button.save-btn');
     } catch (e) {
@@ -1323,7 +1256,6 @@ async function runPlugSelenium(replyText, contextImgPath, dlFolder) {
       catch (e2) { console.warn('[PLUG PUPPETEER] Button fallback failed:', e2.message); }
     }
 
-    // Wait for PNG
     const deadline = Date.now() + 25000;
     while (Date.now() < deadline) {
       const pngs = fs.readdirSync(dlFolder)
@@ -1410,7 +1342,6 @@ async function generatePlugScene(plugMsg, msgsBefore, apiKey, tmpDir, sceneIdx, 
     fCtx.drawImage(plugPil, px, py);
   }
 
-  // Audio
   let wavPlugsay = null;
   if (!plugsaySilent) {
     const mp3Say = path.join(tmpDir, `plug_${sceneIdx}_say.mp3`);
@@ -1513,21 +1444,18 @@ async function buildRizzFrames(rizzImgPath) {
   let meta   = await sharp(srcBuf).metadata();
   let { width: w, height: h } = meta;
 
-  // Crop edges
   srcBuf = await sharp(srcBuf).extract({
     left: CROP_PX, top: CROP_PX,
     width: w - 2 * CROP_PX, height: h - 2 * CROP_PX,
   }).toBuffer();
   w -= 2 * CROP_PX; h -= 2 * CROP_PX;
 
-  // Scale
   const newW = Math.round(w * RIZZ_SCALE);
   const newH = Math.round(h * RIZZ_SCALE);
   srcBuf = await sharp(srcBuf).resize(newW, newH).ensureAlpha().toBuffer();
 
   const srcImg = await loadImage(srcBuf);
 
-  // Build rounded-corner canvas
   const cardCanvas = createCanvas(newW, newH);
   const cCtx = cardCanvas.getContext('2d');
   roundedRect(cCtx, 0, 0, newW, newH, MASK_RADIUS);
@@ -1537,14 +1465,12 @@ async function buildRizzFrames(rizzImgPath) {
   const px = Math.round((W - newW) / 2);
   const py = Math.max(0, Math.round((H - newH) / 2) - OFFSET_UP);
 
-  // Full frame
   const bgFull = createCanvas(W, H);
   const fCtx   = bgFull.getContext('2d');
   fCtx.fillStyle = BG_COLOR;
   fCtx.fillRect(0, 0, W, H);
   fCtx.drawImage(cardCanvas, px, py);
 
-  // Partial frame
   const revealH    = Math.round(newH * RIZZ_REVEAL_RATIO);
   const hideStartY = py + revealH;
 
@@ -1623,11 +1549,10 @@ async function generateRizzScene(rizzMsg, msgsBefore, apiKey, tmpDir, sceneIdx, 
 }
 
 // =====================================================================
-// VIDEO ENCODING via ffmpeg (replaces OVNI/CUDA pipeline)
+// VIDEO ENCODING — EPIPE FIX APPLIED
 // =====================================================================
 async function writeVideoWithFfmpeg(frameCanvases, wavFiles, fps, outputPath) {
   return new Promise((resolve, reject) => {
-    // Calculate frame durations from wav files
     const durations = wavFiles.map(w => getAudioDuration(w));
     const frameCounts = [];
     let cumulative = 0.0;
@@ -1642,7 +1567,6 @@ async function writeVideoWithFfmpeg(frameCanvases, wavFiles, fps, outputPath) {
 
     console.log(`[VIDEO] Encoding ${totalFrames} frames @ ${fps}fps`);
 
-    // Pipe raw RGB frames to ffmpeg
     const ffmpegArgs = [
       '-y',
       '-f', 'rawvideo',
@@ -1659,6 +1583,10 @@ async function writeVideoWithFfmpeg(frameCanvases, wavFiles, fps, outputPath) {
     ];
 
     const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+
+    // ── EPIPE FIX: suppress broken-pipe errors on stdin ──
+    ffmpeg.stdin.on('error', () => {});
+
     ffmpeg.stderr.on('data', d => process.stderr.write(d));
     ffmpeg.on('close', code => {
       if (code === 0) resolve(outputPath);
@@ -1666,18 +1594,15 @@ async function writeVideoWithFfmpeg(frameCanvases, wavFiles, fps, outputPath) {
     });
 
     let lastFrame = null;
-    let writeIdx  = 0;
 
     (async () => {
       for (let si = 0; si < frameCanvases.length; si++) {
         const canvas = frameCanvases[si];
         if (canvas !== null) {
-          // Get raw RGB buffer
-          const ctx   = canvas.getContext('2d');
+          const ctx     = canvas.getContext('2d');
           const imgData = ctx.getImageData(0, 0, W, H);
-          // Strip alpha channel → RGB
-          const rgba  = imgData.data;
-          const rgb24 = Buffer.allocUnsafe(W * H * 3);
+          const rgba    = imgData.data;
+          const rgb24   = Buffer.allocUnsafe(W * H * 3);
           for (let p = 0; p < W * H; p++) {
             rgb24[p * 3]     = rgba[p * 4];
             rgb24[p * 3 + 1] = rgba[p * 4 + 1];
@@ -1690,13 +1615,22 @@ async function writeVideoWithFfmpeg(frameCanvases, wavFiles, fps, outputPath) {
 
         const count = frameCounts[si] || 0;
         for (let f = 0; f < count; f++) {
+          if (ffmpeg.stdin.destroyed) break;
           const ok = ffmpeg.stdin.write(lastFrame);
-          writeIdx++;
-          if (!ok) await new Promise(r => ffmpeg.stdin.once('drain', r));
+          if (!ok) {
+            await new Promise((r, j) => {
+              ffmpeg.stdin.once('drain', r);
+              ffmpeg.stdin.once('error', j);
+              ffmpeg.once('close', j);
+            });
+          }
         }
       }
-      ffmpeg.stdin.end();
-    })().catch(reject);
+      if (!ffmpeg.stdin.destroyed) ffmpeg.stdin.end();
+    })().catch(err => {
+      if (!ffmpeg.stdin.destroyed) ffmpeg.stdin.destroy();
+      reject(err);
+    });
   });
 }
 
@@ -1734,7 +1668,6 @@ function getVideoInfo(videoPath) {
 }
 
 function detectNonsilentRanges(audioPath, minSilenceLen = 160, silenceThresh = -60) {
-  // Use ffmpeg silencedetect to find silence ranges
   const r = spawnSync('ffmpeg', [
     '-i', audioPath,
     '-af', `silencedetect=n=${silenceThresh}dB:d=${minSilenceLen / 1000}`,
@@ -1752,13 +1685,11 @@ function detectNonsilentRanges(audioPath, minSilenceLen = 160, silenceThresh = -
     if (me) silEnd.push(parseFloat(me[1]));
   }
 
-  // Build nonsilent ranges from silence ranges
   const duration = getAudioDuration(audioPath);
   const silRanges = [];
   const n = Math.min(silStart.length, silEnd.length);
   for (let i = 0; i < n; i++) silRanges.push([silStart[i], silEnd[i]]);
 
-  // Gaps between silences = speech
   const speech = [];
   let cursor = 0.0;
   for (const [ss, se] of silRanges) {
@@ -1781,7 +1712,6 @@ async function removeSilenceFromVideo(inputVideo, outputVideo, protectedRangesSe
     const audioWav = path.join(tmpDir, 'audio.wav');
     spawnSync('ffmpeg', ['-y', '-i', inputVideo, '-vn', '-ac', '1', '-ar', '16000', audioWav]);
 
-    // Build keep ranges
     let keepRanges;
     if (!protectedRangesSec || protectedRangesSec.length === 0) {
       const speech = detectNonsilentRanges(audioWav);
@@ -1798,7 +1728,6 @@ async function removeSilenceFromVideo(inputVideo, outputVideo, protectedRangesSe
       }
     } else {
       console.log(`🔒 Protected ranges: ${JSON.stringify(protectedRangesSec)}`);
-      // Build slabs around protected ranges
       const prot = protectedRangesSec.slice().sort((a, b) => a[0] - b[0]);
       const slabs = [];
       let cursor = 0.0;
@@ -1814,7 +1743,6 @@ async function removeSilenceFromVideo(inputVideo, outputVideo, protectedRangesSe
         if (slab.protected) {
           keepRanges.push([slab.start, slab.end]);
         } else {
-          // Extract this slab audio to a temp file and detect non-silence in it
           const slabWav = path.join(tmpDir, `slab_${slab.start.toFixed(3)}.wav`);
           spawnSync('ffmpeg', [
             '-y', '-i', audioWav,
@@ -1844,13 +1772,8 @@ async function removeSilenceFromVideo(inputVideo, outputVideo, protectedRangesSe
       return outputVideo;
     }
 
-    // Build ffmpeg complex filter to cut video and audio simultaneously
-    const filterParts  = [];
-    const vSelectParts = [];
-    const aSelectParts = [];
     const selectExpr = keepRanges.map(([s, e]) => `between(t,${s},${e})`).join('+');
 
-    // Use ffmpeg select/aselect for frame filtering
     const r = spawnSync('ffmpeg', [
       '-y', '-i', inputVideo,
       '-vf', `select='${selectExpr}',setpts=N/FRAME_RATE/TB`,
@@ -1893,7 +1816,6 @@ async function runTextingVideo(scriptPath, imageBaseDir, apiKey, sentSfxPath, re
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'texting_video_'));
   const tag    = THEME.filename_tag;
 
-  // Find unused output filename
   let counter = 1;
   let rawOutputFile, finalOutputFile;
   do {
@@ -1945,13 +1867,11 @@ async function runTextingVideo(scriptPath, imageBaseDir, apiKey, sentSfxPath, re
           const isBreak      = last.is_break    || false;
           const ttsText      = last.tts_text || stripBlurMarkers(last.text || '');
 
-          // ── BREAK ──
           if (isBreak) {
             const brkDur = last.duration_s;
             const wavBrk = path.join(tmpDir, `scene_${String(sceneIdx).padStart(4,'0')}_break.wav`);
             generateSilentWav(brkDur, wavBrk);
             const actualDur = getAudioDuration(wavBrk);
-
             scenesData.push(null);
             wavFiles.push(wavBrk);
             breakProtectedRanges.push([curT, curT + actualDur]);
@@ -1961,12 +1881,10 @@ async function runTextingVideo(scriptPath, imageBaseDir, apiKey, sentSfxPath, re
             continue;
           }
 
-          // ── PLUG ──
           if (isPlug) {
             const { frame: plugFrame, wavPlugsay, wavPlug } = await generatePlugScene(
               last, allRenderedMsgs, apiKey, tmpDir, sceneIdx, imageBaseDir
             );
-
             if (wavPlugsay) {
               const durSay = getAudioDuration(wavPlugsay);
               scenesData.push(plugFrame); wavFiles.push(wavPlugsay);
@@ -1982,12 +1900,10 @@ async function runTextingVideo(scriptPath, imageBaseDir, apiKey, sentSfxPath, re
             continue;
           }
 
-          // ── RIZZ ──
           if (isRizz) {
             const { framePartial, frameFull, wavRizzsay, wavRizz } = await generateRizzScene(
               last, allRenderedMsgs, apiKey, tmpDir, sceneIdx, imageBaseDir
             );
-
             if (wavRizzsay) {
               const durSay = getAudioDuration(wavRizzsay);
               scenesData.push(framePartial); wavFiles.push(wavRizzsay);
@@ -2003,7 +1919,6 @@ async function runTextingVideo(scriptPath, imageBaseDir, apiKey, sentSfxPath, re
             continue;
           }
 
-          // ── REGULAR MESSAGE ──
           const isDotsOnly = /^[.\s…]+$/.test(last.text || '');
 
           let ttsMp3;
@@ -2053,15 +1968,12 @@ async function runTextingVideo(scriptPath, imageBaseDir, apiKey, sentSfxPath, re
 
     console.log(`\n[INFO] Total scenes: ${scenesData.length} | WAVs: ${wavFiles.length} | Duration: ${curT.toFixed(4)}s`);
 
-    // Concatenate all audio
     const finalAudio = path.join(tmpDir, 'final_audio.wav');
     concatWavFiles(wavFiles, finalAudio);
 
-    // Encode video (no audio first)
     const videoNoAudio = rawOutputFile.replace('.mp4', '_videoonly.mp4');
     await writeVideoWithFfmpeg(scenesData, wavFiles, 30, videoNoAudio);
 
-    // Mux with audio
     await muxVideoAudio(videoNoAudio, finalAudio, rawOutputFile);
     if (fs.existsSync(videoNoAudio)) fs.unlinkSync(videoNoAudio);
 
@@ -2070,7 +1982,6 @@ async function runTextingVideo(scriptPath, imageBaseDir, apiKey, sentSfxPath, re
     IMAGE_BASE_DIR = savedImageBaseDir;
   }
 
-  // Silence removal
   const finalOutput = await removeSilenceFromVideo(
     rawOutputFile, finalOutputFile,
     breakProtectedRanges.length ? breakProtectedRanges : null
@@ -2114,4 +2025,3 @@ module.exports = {
   stripBlurMarkers, extractBlurRuns, parseTtsOverride,
   THEMES, AI33PRO_VOICE_MAP,
 };
-
