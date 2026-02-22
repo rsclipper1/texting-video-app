@@ -1552,80 +1552,68 @@ async function generateRizzScene(rizzMsg, msgsBefore, apiKey, tmpDir, sceneIdx, 
 // VIDEO ENCODING — EPIPE FIX APPLIED
 // =====================================================================
 async function writeVideoWithFfmpeg(frameCanvases, wavFiles, fps, outputPath) {
-  return new Promise((resolve, reject) => {
-    const durations = wavFiles.map(w => getAudioDuration(w));
-    const frameCounts = [];
-    let cumulative = 0.0;
-    let prevEndFrame = 0;
-    for (const d of durations) {
-      cumulative += d;
-      const endFrame = Math.round(cumulative * fps);
-      frameCounts.push(endFrame - prevEndFrame);
-      prevEndFrame = endFrame;
-    }
-    const totalFrames = frameCounts.reduce((a, b) => a + b, 0);
-    console.log(`[VIDEO] Encoding ${totalFrames} frames @ ${fps}fps`);
+  const durations = wavFiles.map(w => getAudioDuration(w));
+  const frameCounts = [];
+  let cumulative = 0.0;
+  let prevEndFrame = 0;
+  for (const d of durations) {
+    cumulative += d;
+    const endFrame = Math.round(cumulative * fps);
+    frameCounts.push(endFrame - prevEndFrame);
+    prevEndFrame = endFrame;
+  }
+  const totalFrames = frameCounts.reduce((a, b) => a + b, 0);
+  console.log(`[VIDEO] Encoding ${totalFrames} frames @ ${fps}fps`);
 
-    const ffmpegArgs = [
-      '-y',
-      '-f', 'rawvideo', '-vcodec', 'rawvideo',
-      '-s', `${W}x${H}`, '-pix_fmt', 'rgb24', '-r', String(fps),
-      '-i', 'pipe:0',
-      '-vcodec', 'libx264', '-preset', 'ultrafast', '-crf', '23',
-      '-pix_fmt', 'yuv420p',
-      outputPath,
-    ];
+  // Write all frames as individual PNG files then encode with ffmpeg concat
+  const frameDir = outputPath + '_frames';
+  fs.mkdirSync(frameDir, { recursive: true });
 
-    const ffmpeg = spawn('ffmpeg', ffmpegArgs);
-    ffmpeg.stdin.setMaxListeners(20);
-    ffmpeg.setMaxListeners(20);
-    ffmpeg.stdin.on('error', () => {});
-
-    let done = false;
-    ffmpeg.stderr.on('data', d => process.stderr.write(d));
-    ffmpeg.on('close', code => {
-      if (done) return;
-      done = true;
-      if (code === 0 || code === null) resolve(outputPath);
-      else reject(new Error(`ffmpeg exited with ${code}`));
-    });
-
+  try {
+    let frameIdx = 0;
     let lastFrame = null;
 
-    (async () => {
-      for (let si = 0; si < frameCanvases.length; si++) {
-        const canvas = frameCanvases[si];
-        if (canvas !== null) {
-          const ctx     = canvas.getContext('2d');
-          const imgData = ctx.getImageData(0, 0, W, H);
-          const rgba    = imgData.data;
-          const rgb24   = Buffer.allocUnsafe(W * H * 3);
-          for (let p = 0; p < W * H; p++) {
-            rgb24[p * 3]     = rgba[p * 4];
-            rgb24[p * 3 + 1] = rgba[p * 4 + 1];
-            rgb24[p * 3 + 2] = rgba[p * 4 + 2];
-          }
-          lastFrame = rgb24;
-        }
-
-        if (!lastFrame) continue;
-
-        const count = frameCounts[si] || 0;
-        for (let f = 0; f < count; f++) {
-          if (ffmpeg.stdin.destroyed) break;
-          const ok = ffmpeg.stdin.write(lastFrame);
-          if (!ok) {
-            await new Promise(r => {
-              ffmpeg.stdin.once('drain', r);
-            });
-          }
-        }
+    for (let si = 0; si < frameCanvases.length; si++) {
+      const canvas = frameCanvases[si];
+      if (canvas !== null) {
+        lastFrame = canvas.toBuffer('image/png');
       }
-      if (!ffmpeg.stdin.destroyed) ffmpeg.stdin.end();
-    })().catch(() => {
-      if (!ffmpeg.stdin.destroyed) ffmpeg.stdin.destroy();
-    });
-  });
+      if (!lastFrame) continue;
+
+      const count = frameCounts[si] || 0;
+      for (let f = 0; f < count; f++) {
+        const framePath = path.join(frameDir, `frame_${String(frameIdx).padStart(6, '0')}.png`);
+        fs.writeFileSync(framePath, lastFrame);
+        frameIdx++;
+      }
+    }
+
+    console.log(`[VIDEO] Wrote ${frameIdx} PNG frames, now encoding...`);
+
+    // Encode with ffmpeg from PNG sequence
+    const r = spawnSync('ffmpeg', [
+      '-y',
+      '-framerate', String(fps),
+      '-i', path.join(frameDir, 'frame_%06d.png'),
+      '-vcodec', 'libx264',
+      '-preset', 'ultrafast',
+      '-crf', '23',
+      '-pix_fmt', 'yuv420p',
+      outputPath,
+    ], { encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 });
+
+    if (r.status !== 0) {
+      console.error('[VIDEO] ffmpeg stderr:', r.stderr);
+      throw new Error(`ffmpeg encode failed: ${r.status}`);
+    }
+
+    console.log('[VIDEO] Encode complete.');
+    return outputPath;
+
+  } finally {
+    // Clean up frame files
+    try { fs.rmSync(frameDir, { recursive: true, force: true }); } catch (_) {}
+  }
 }
 
 async function muxVideoAudio(videoPath, audioPath, outputPath) {
