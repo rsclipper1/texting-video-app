@@ -1,10 +1,7 @@
 'use strict';
-/**
- * worker.js — runs inside a forked child process.
- * Reads env vars set by server.js, calls runTextingVideo(), and
- * sends { type:'done', outputPath } or { type:'error', error } to parent.
- */
 
+// Tell fluent-ffmpeg and spawnSync where ffmpeg lives on Railway/Nix
+process.env.PATH = process.env.PATH + ':/usr/bin:/bin:/nix/var/nix/profiles/default/bin';
 process.on('uncaughtException', err => {
   process.send({ type: 'error', error: err.message });
   process.exit(1);

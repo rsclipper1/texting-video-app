@@ -24,6 +24,15 @@ const crypto  = require('crypto');
 const { execSync, spawnSync, spawn } = require('child_process');
 const readline = require('readline');
 
+// Ensure ffmpeg is findable in all environments
+const { execSync: _exec } = require('child_process');
+try {
+  const ffmpegPath = _exec('which ffmpeg').toString().trim();
+  console.log('[FFMPEG PATH]', ffmpegPath);
+} catch(e) {
+  console.warn('[FFMPEG] ffmpeg not found in PATH:', process.env.PATH);
+}
+
 // =====================================================================
 // RESOLUTION: 1080 x 1920 (9:16 portrait)
 // =====================================================================
