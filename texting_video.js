@@ -287,7 +287,12 @@ async function genElevenLabsAudio(apiKey, text, outPath, speaker) {
     timeout: 60000,
     responseType: 'arraybuffer',
   });
-  if (resp.status !== 200) throw new Error(`ElevenLabs TTS failed: ${resp.status}`);
+  if (resp.status !== 200) {
+    const msg = resp.status === 402
+      ? 'ElevenLabs 402: Insufficient credits. Top up at elevenlabs.io/subscription or switch to AI33Pro.'
+      : `ElevenLabs TTS failed with status ${resp.status}`;
+    throw new Error(msg);
+  }
 
   const buf = Buffer.from(resp.data);
   fs.writeFileSync(outPath, buf);
@@ -1617,53 +1622,60 @@ async function writeVideoWithFfmpeg(frameCanvases, wavFiles, fps, outputPath) {
   const totalFrames = frameCounts.reduce((a, b) => a + b, 0);
   console.log(`[VIDEO] Encoding ${totalFrames} frames @ ${fps}fps`);
 
-  // Write all frames as individual PNG files then encode with ffmpeg concat
+  // Write frames as JPEG (quality 95) instead of PNG — ~10x smaller files,
+  // keeps total disk/RAM under Railway free-tier limits (512 MB).
   const frameDir = outputPath + '_frames';
   fs.mkdirSync(frameDir, { recursive: true });
 
   try {
     let frameIdx = 0;
-    let lastFrame = null;
+    let lastFrameJpeg = null;
 
     for (let si = 0; si < frameCanvases.length; si++) {
       const canvas = frameCanvases[si];
       if (canvas !== null) {
-        lastFrame = canvas.toBuffer('image/png');
+        const pngBuf = canvas.toBuffer('image/png');
+        lastFrameJpeg = await sharp(pngBuf)
+          .jpeg({ quality: 95, mozjpeg: false })
+          .toBuffer();
       }
-      if (!lastFrame) continue;
+      if (!lastFrameJpeg) continue;
 
       const count = frameCounts[si] || 0;
       for (let f = 0; f < count; f++) {
-        const framePath = path.join(frameDir, `frame_${String(frameIdx).padStart(6, '0')}.png`);
-        fs.writeFileSync(framePath, lastFrame);
+        const framePath = path.join(frameDir, `frame_${String(frameIdx).padStart(6, '0')}.jpg`);
+        fs.writeFileSync(framePath, lastFrameJpeg);
         frameIdx++;
       }
     }
 
-    console.log(`[VIDEO] Wrote ${frameIdx} PNG frames, now encoding...`);
+    console.log(`[VIDEO] Wrote ${frameIdx} JPEG frames, now encoding...`);
 
-    // Encode with ffmpeg from PNG sequence
-    const r = spawnSync('ffmpeg', [
+    const ffmpegBin = (() => {
+      try { return _exec('which ffmpeg').toString().trim(); } catch (_) { return 'ffmpeg'; }
+    })();
+
+    const r = spawnSync(ffmpegBin, [
       '-y',
       '-framerate', String(fps),
-      '-i', path.join(frameDir, 'frame_%06d.png'),
+      '-i', path.join(frameDir, 'frame_%06d.jpg'),
       '-vcodec', 'libx264',
       '-preset', 'ultrafast',
       '-crf', '23',
       '-pix_fmt', 'yuv420p',
+      '-threads', '2',
       outputPath,
-    ], { encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 });
+    ], { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 
-    if (r.status !== 0) {
-      console.error('[VIDEO] ffmpeg stderr:', r.stderr);
-      throw new Error(`ffmpeg encode failed: ${r.status}`);
+    if (r.status !== 0 || r.signal) {
+      console.error('[VIDEO] ffmpeg stderr:', (r.stderr || '').slice(-3000));
+      throw new Error(`ffmpeg encode failed: status=${r.status} signal=${r.signal}`);
     }
 
     console.log('[VIDEO] Encode complete.');
     return outputPath;
 
   } finally {
-    // Clean up frame files
     try { fs.rmSync(frameDir, { recursive: true, force: true }); } catch (_) {}
   }
 }
