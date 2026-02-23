@@ -1565,79 +1565,65 @@ async function writeVideoWithFfmpeg(frameCanvases, wavFiles, fps, outputPath) {
   const totalFrames = frameCounts.reduce((a, b) => a + b, 0);
   console.log(`[VIDEO] Encoding ${totalFrames} frames @ ${fps}fps`);
 
-  // Stream frames directly into ffmpeg via stdin pipe — avoids writing
-  // hundreds of PNGs to disk and blowing Railway's 512 MB RAM limit.
-  return new Promise((resolve, reject) => {
+  // ── Write frames as JPEG (not PNG) to slash disk+RAM usage by ~10x ──
+  // Each 1080x1920 PNG ≈ 2–6 MB; JPEG quality 95 ≈ 300–600 KB.
+  // This keeps total disk use under ~300 MB for a 30-sec clip.
+  const frameDir = outputPath + '_frames';
+  fs.mkdirSync(frameDir, { recursive: true });
+
+  try {
+    let frameIdx = 0;
+    let lastFrameJpeg = null;
+
+    for (let si = 0; si < frameCanvases.length; si++) {
+      const canvas = frameCanvases[si];
+      if (canvas !== null) {
+        // Convert canvas → JPEG buffer via sharp (much smaller than PNG)
+        const pngBuf = canvas.toBuffer('image/png');
+        lastFrameJpeg = await sharp(pngBuf)
+          .jpeg({ quality: 95, mozjpeg: false })
+          .toBuffer();
+      }
+      if (!lastFrameJpeg) continue;
+
+      const count = frameCounts[si] || 0;
+      for (let f = 0; f < count; f++) {
+        const framePath = path.join(frameDir, `frame_${String(frameIdx).padStart(6, '0')}.jpg`);
+        fs.writeFileSync(framePath, lastFrameJpeg);
+        frameIdx++;
+      }
+    }
+
+    console.log(`[VIDEO] Wrote ${frameIdx} JPEG frames, now encoding...`);
+
     const ffmpegBin = (() => {
       try { return _exec('which ffmpeg').toString().trim(); } catch (_) { return 'ffmpeg'; }
     })();
 
-    const ff = spawn(ffmpegBin, [
+    // -threads 2 keeps ffmpeg's RAM footprint low on Railway free tier
+    const r = spawnSync(ffmpegBin, [
       '-y',
       '-framerate', String(fps),
-      '-f', 'image2pipe',
-      '-vcodec', 'png',
-      '-i', 'pipe:0',
+      '-i', path.join(frameDir, 'frame_%06d.jpg'),
       '-vcodec', 'libx264',
       '-preset', 'ultrafast',
       '-crf', '23',
       '-pix_fmt', 'yuv420p',
+      '-threads', '2',
       outputPath,
-    ], { stdio: ['pipe', 'ignore', 'pipe'] });
+    ], { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 
-    let stderrBuf = '';
-    ff.stderr.on('data', d => { stderrBuf += d.toString(); });
-
-    ff.on('error', err => reject(new Error(`ffmpeg spawn error: ${err.message}`)));
-    ff.on('close', code => {
-      if (code === 0) {
-        console.log('[VIDEO] Encode complete.');
-        resolve(outputPath);
-      } else {
-        console.error('[VIDEO] ffmpeg stderr:', stderrBuf.slice(-2000));
-        reject(new Error(`ffmpeg encode failed with code ${code}`));
-      }
-    });
-
-    // Write frames one at a time into ffmpeg's stdin
-    let frameIdx = 0;
-    let lastFrame = null;
-
-    function writeNext(si) {
-      if (si >= frameCanvases.length) {
-        console.log(`[VIDEO] Streamed ${frameIdx} frames, waiting for encode...`);
-        ff.stdin.end();
-        return;
-      }
-
-      const canvas = frameCanvases[si];
-      if (canvas !== null) {
-        lastFrame = canvas.toBuffer('image/png');
-      }
-
-      const count = (lastFrame ? (frameCounts[si] || 0) : 0);
-      let f = 0;
-
-      function writeFrame() {
-        if (f >= count) {
-          frameIdx += count;
-          writeNext(si + 1);
-          return;
-        }
-        const ok = ff.stdin.write(lastFrame);
-        f++;
-        if (ok) {
-          writeFrame();
-        } else {
-          ff.stdin.once('drain', writeFrame);
-        }
-      }
-
-      writeFrame();
+    if (r.status !== 0 || r.signal) {
+      console.error('[VIDEO] ffmpeg stderr:', (r.stderr || '').slice(-3000));
+      throw new Error(`ffmpeg encode failed: status=${r.status} signal=${r.signal}`);
     }
 
-    writeNext(0);
-  });
+    console.log('[VIDEO] Encode complete.');
+    return outputPath;
+
+  } finally {
+    try { fs.rmSync(frameDir, { recursive: true, force: true }); } catch (_) {}
+  }
 }
 
 async function muxVideoAudio(videoPath, audioPath, outputPath) {
