@@ -40,14 +40,18 @@ app.post('/api/generate', upload.fields([
   { name: 'receivedSfx', maxCount: 1 },
 ]), async (req, res) => {
   try {
-    const apiKey  = (req.body.apiKey  || '').trim();
-    const theme   = (req.body.theme   || 'dark').trim();
+    const apiKey      = (req.body.apiKey      || '').trim();
+    const theme       = (req.body.theme       || 'dark').trim();
+    const ttsProvider = (req.body.ttsProvider || 'ai33pro').trim();
 
     if (!req.files?.script?.[0]) {
       return res.status(400).json({ error: 'Script file is required.' });
     }
     if (!apiKey) {
       return res.status(400).json({ error: 'API key is required.' });
+    }
+    if (!['ai33pro', 'elevenlabs'].includes(ttsProvider)) {
+      return res.status(400).json({ error: 'Invalid ttsProvider. Use ai33pro or elevenlabs.' });
     }
 
     const jobId  = uuidv4();
@@ -85,7 +89,7 @@ app.post('/api/generate', upload.fields([
     jobs[jobId] = { status: 'queued', log: [], outputPath: null, error: null };
 
     // Run async (don't await)
-    _runJob(jobId, jobDir, scriptDest, apiKey, theme, sentSfxPath, receivedSfxPath).catch(err => {
+    _runJob(jobId, jobDir, scriptDest, apiKey, theme, ttsProvider, sentSfxPath, receivedSfxPath).catch(err => {
       jobs[jobId].status = 'error';
       jobs[jobId].error  = err.message;
     });
@@ -121,11 +125,11 @@ app.get('/api/download/:jobId', (req, res) => {
 // ─────────────────────────────────────────────────────────────────────
 // INTERNAL: run the texting-video pipeline in a child process
 // ─────────────────────────────────────────────────────────────────────
-async function _runJob(jobId, jobDir, scriptPath, apiKey, theme, sentSfx, receivedSfx) {
+async function _runJob(jobId, jobDir, scriptPath, apiKey, theme, ttsProvider, sentSfx, receivedSfx) {
   const { fork } = require('child_process');
   const job = jobs[jobId];
   job.status = 'running';
-  job.log.push(`[${_ts()}] Job started. Theme: ${theme}`);
+  job.log.push(`[${_ts()}] Job started. Theme: ${theme} | TTS: ${ttsProvider}`);
 
   return new Promise((resolve, reject) => {
     const worker = fork(path.join(__dirname, 'worker.js'), [], {
@@ -136,6 +140,7 @@ async function _runJob(jobId, jobDir, scriptPath, apiKey, theme, sentSfx, receiv
         BASE_DIR:     jobDir,
         API_KEY:      apiKey,
         THEME:        theme,
+        TTS_PROVIDER:  ttsProvider,
         SENT_SFX:     sentSfx,
         RECEIVED_SFX: receivedSfx,
       },

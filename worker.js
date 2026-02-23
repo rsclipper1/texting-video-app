@@ -18,8 +18,11 @@ console.warn  = (...a) => { process.stdout.write('[WARN] ' + a.join(' ') + '\n')
 console.error = (...a) => { process.stdout.write('[ERR]  ' + a.join(' ') + '\n'); };
 
 const {
-  JOB_ID, SCRIPT_PATH, BASE_DIR, API_KEY, THEME, SENT_SFX, RECEIVED_SFX,
+  JOB_ID, SCRIPT_PATH, BASE_DIR, API_KEY, THEME, TTS_PROVIDER, SENT_SFX, RECEIVED_SFX,
 } = process.env;
+
+// Forward TTS provider so genTTSAudio dispatcher picks it up
+if (TTS_PROVIDER) process.env.TTS_PROVIDER = TTS_PROVIDER;
 
 // Patch askTheme so it doesn't block waiting for stdin
 const textvid = require('./texting_video.js');

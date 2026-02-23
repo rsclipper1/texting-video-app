@@ -1346,7 +1346,7 @@ async function generatePlugScene(plugMsg, msgsBefore, apiKey, tmpDir, sceneIdx, 
   if (!plugsaySilent) {
     const mp3Say = path.join(tmpDir, `plug_${sceneIdx}_say.mp3`);
     wavPlugsay   = path.join(tmpDir, `plug_${sceneIdx}_say.wav`);
-    await genAi33ProAudio(apiKey, plugsayTtsText, mp3Say, plugsaySpeaker);
+    await genTTSAudio(apiKey, plugsayTtsText, mp3Say, plugsaySpeaker);
     convertToWav(mp3Say, wavPlugsay);
   } else if (plugsaySfx) {
     const sfxPath = resolveSfxPath(plugsaySfx, imageBaseDir);
@@ -1360,7 +1360,7 @@ async function generatePlugScene(plugMsg, msgsBefore, apiKey, tmpDir, sceneIdx, 
   if (!plugSilent) {
     const mp3Reply = path.join(tmpDir, `plug_${sceneIdx}_reply.mp3`);
     wavPlug        = path.join(tmpDir, `plug_${sceneIdx}_reply.wav`);
-    await genAi33ProAudio(apiKey, plugTtsText, mp3Reply, plugSpeaker);
+    await genTTSAudio(apiKey, plugTtsText, mp3Reply, plugSpeaker);
     convertToWav(mp3Reply, wavPlug);
   }
 
@@ -1527,7 +1527,7 @@ async function generateRizzScene(rizzMsg, msgsBefore, apiKey, tmpDir, sceneIdx, 
   if (!rizzsaySilent) {
     const mp3Say = path.join(tmpDir, `rizz_${sceneIdx}_say.mp3`);
     wavRizzsay   = path.join(tmpDir, `rizz_${sceneIdx}_say.wav`);
-    await genAi33ProAudio(apiKey, rizzsayTtsText, mp3Say, rizzsaySpeaker);
+    await genTTSAudio(apiKey, rizzsayTtsText, mp3Say, rizzsaySpeaker);
     convertToWav(mp3Say, wavRizzsay);
   } else if (rizzsaySfx) {
     const sfxPath = resolveSfxPath(rizzsaySfx, imageBaseDir);
@@ -1541,7 +1541,7 @@ async function generateRizzScene(rizzMsg, msgsBefore, apiKey, tmpDir, sceneIdx, 
   if (!rizzSilent) {
     const mp3Reply = path.join(tmpDir, `rizz_${sceneIdx}_reply.mp3`);
     wavRizz        = path.join(tmpDir, `rizz_${sceneIdx}_reply.wav`);
-    await genAi33ProAudio(apiKey, rizzTtsText, mp3Reply, rizzSpeaker);
+    await genTTSAudio(apiKey, rizzTtsText, mp3Reply, rizzSpeaker);
     convertToWav(mp3Reply, wavRizz);
   }
 
@@ -1565,63 +1565,53 @@ async function writeVideoWithFfmpeg(frameCanvases, wavFiles, fps, outputPath) {
   const totalFrames = frameCounts.reduce((a, b) => a + b, 0);
   console.log(`[VIDEO] Encoding ${totalFrames} frames @ ${fps}fps`);
 
-  // ── Write frames as JPEG (not PNG) to slash disk+RAM usage by ~10x ──
-  // Each 1080x1920 PNG ≈ 2–6 MB; JPEG quality 95 ≈ 300–600 KB.
-  // This keeps total disk use under ~300 MB for a 30-sec clip.
+  // Write all frames as individual PNG files then encode with ffmpeg concat
   const frameDir = outputPath + '_frames';
   fs.mkdirSync(frameDir, { recursive: true });
 
   try {
     let frameIdx = 0;
-    let lastFrameJpeg = null;
+    let lastFrame = null;
 
     for (let si = 0; si < frameCanvases.length; si++) {
       const canvas = frameCanvases[si];
       if (canvas !== null) {
-        // Convert canvas → JPEG buffer via sharp (much smaller than PNG)
-        const pngBuf = canvas.toBuffer('image/png');
-        lastFrameJpeg = await sharp(pngBuf)
-          .jpeg({ quality: 95, mozjpeg: false })
-          .toBuffer();
+        lastFrame = canvas.toBuffer('image/png');
       }
-      if (!lastFrameJpeg) continue;
+      if (!lastFrame) continue;
 
       const count = frameCounts[si] || 0;
       for (let f = 0; f < count; f++) {
-        const framePath = path.join(frameDir, `frame_${String(frameIdx).padStart(6, '0')}.jpg`);
-        fs.writeFileSync(framePath, lastFrameJpeg);
+        const framePath = path.join(frameDir, `frame_${String(frameIdx).padStart(6, '0')}.png`);
+        fs.writeFileSync(framePath, lastFrame);
         frameIdx++;
       }
     }
 
-    console.log(`[VIDEO] Wrote ${frameIdx} JPEG frames, now encoding...`);
+    console.log(`[VIDEO] Wrote ${frameIdx} PNG frames, now encoding...`);
 
-    const ffmpegBin = (() => {
-      try { return _exec('which ffmpeg').toString().trim(); } catch (_) { return 'ffmpeg'; }
-    })();
-
-    // -threads 2 keeps ffmpeg's RAM footprint low on Railway free tier
-    const r = spawnSync(ffmpegBin, [
+    // Encode with ffmpeg from PNG sequence
+    const r = spawnSync('ffmpeg', [
       '-y',
       '-framerate', String(fps),
-      '-i', path.join(frameDir, 'frame_%06d.jpg'),
+      '-i', path.join(frameDir, 'frame_%06d.png'),
       '-vcodec', 'libx264',
       '-preset', 'ultrafast',
       '-crf', '23',
       '-pix_fmt', 'yuv420p',
-      '-threads', '2',
       outputPath,
-    ], { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+    ], { encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 });
 
-    if (r.status !== 0 || r.signal) {
-      console.error('[VIDEO] ffmpeg stderr:', (r.stderr || '').slice(-3000));
-      throw new Error(`ffmpeg encode failed: status=${r.status} signal=${r.signal}`);
+    if (r.status !== 0) {
+      console.error('[VIDEO] ffmpeg stderr:', r.stderr);
+      throw new Error(`ffmpeg encode failed: ${r.status}`);
     }
 
     console.log('[VIDEO] Encode complete.');
     return outputPath;
 
   } finally {
+    // Clean up frame files
     try { fs.rmSync(frameDir, { recursive: true, force: true }); } catch (_) {}
   }
 }
@@ -1918,7 +1908,7 @@ async function runTextingVideo(scriptPath, imageBaseDir, apiKey, sentSfxPath, re
             ttsMp3 = lastSender === 'me' ? sentSfxPath : receivedSfxPath;
           } else {
             ttsMp3 = path.join(tmpDir, `${contact}_${start}_${i}_tts.mp3`);
-            await genAi33ProAudio(apiKey, ttsText, ttsMp3, last.speaker);
+            await genTTSAudio(apiKey, ttsText, ttsMp3, last.speaker);
           }
 
           if (sfxName) {
@@ -2012,7 +2002,8 @@ if (require.main === module) {
 }
 
 module.exports = {
-  runTextingVideo, parseFileSettingsAndThreads, genAi33ProAudio,
+  runTextingVideo, parseFileSettingsAndThreads,
+  genAi33ProAudio, genElevenLabsAudio, genTTSAudio,
   bubbleCanvas, createContactHeader, createSceneImage,
   stripBlurMarkers, extractBlurRuns, parseTtsOverride,
   THEMES, AI33PRO_VOICE_MAP,
