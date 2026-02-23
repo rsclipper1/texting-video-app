@@ -256,6 +256,58 @@ async function genAi33ProAudio(apiKey, text, outPath, speaker) {
 }
 
 // =====================================================================
+// ELEVENLABS TTS (direct — synchronous response, no task queue)
+// =====================================================================
+async function genElevenLabsAudio(apiKey, text, outPath, speaker) {
+  const cached = ttsCachePath(text + '__el', speaker);
+  if (fs.existsSync(cached) && fs.statSync(cached).size > 0) {
+    console.log(`[TTS CACHE] HIT  \u2192 ${path.basename(cached)} (ElevenLabs)`);
+    fs.copyFileSync(cached, outPath);
+    return;
+  }
+  console.log(`[TTS CACHE] MISS \u2192 calling ElevenLabs for speaker='${speaker}'`);
+
+  const voiceId = getVoiceId(speaker);
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`;
+  const headers = { 'xi-api-key': apiKey, 'Content-Type': 'application/json' };
+  const payload = {
+    text,
+    model_id: 'eleven_multilingual_v2',
+    voice_settings: {
+      stability: 0.5,
+      similarity_boost: 0.75,
+      speed: 1.17,
+      style: 0.5,
+      use_speaker_boost: true,
+    },
+  };
+
+  const resp = await axios.post(url, payload, {
+    headers,
+    timeout: 60000,
+    responseType: 'arraybuffer',
+  });
+  if (resp.status !== 200) throw new Error(`ElevenLabs TTS failed: ${resp.status}`);
+
+  const buf = Buffer.from(resp.data);
+  fs.writeFileSync(outPath, buf);
+  fs.writeFileSync(cached, buf);
+  console.log(`[TTS CACHE] SAVED \u2192 ${path.basename(cached)} (ElevenLabs)`);
+}
+
+// =====================================================================
+// UNIFIED TTS DISPATCHER
+// Reads TTS_PROVIDER env var: 'elevenlabs' | 'ai33pro' (default)
+// =====================================================================
+async function genTTSAudio(apiKey, text, outPath, speaker) {
+  const provider = (process.env.TTS_PROVIDER || 'ai33pro').toLowerCase();
+  if (provider === 'elevenlabs') {
+    return genElevenLabsAudio(apiKey, text, outPath, speaker);
+  }
+  return genAi33ProAudio(apiKey, text, outPath, speaker);
+}
+
+// =====================================================================
 // AUDIO HELPERS (ffmpeg/ffprobe via child_process)
 // =====================================================================
 function getAudioDuration(audioPath) {
